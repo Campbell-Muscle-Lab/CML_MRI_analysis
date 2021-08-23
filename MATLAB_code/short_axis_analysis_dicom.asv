@@ -1,33 +1,40 @@
 function short_axis_analysis
 
 % Variables
-dicom_file_string = 'c:\temp\dicom.dcm';
+dicom_file_string = '../data/7-30-21-_scan1_ED10/SA_1/2.dcm';
+frame_number = 11;
 no_of_segmentation_levels = 6;
-no_of_angles = 10;
-
+no_of_angles = 25;
+strip_width = 1;
+min_peak_depth = 0.025;
 wall_prop_thresh = 0.5;
-% 
-% v = VideoWriter('example_analysis_2', 'Motion JPEG 2000');
-% v.FrameRate = 3;
-% open(v);
+
+video_output_file = '../output/example_analysis.avi'
+video_output = 1;
+
+
+if (video_output)
+    v = VideoWriter(video_output_file);
+    v.FrameRate = 3;
+    open(v);
+end
 
 % Code
 
 % Read dicom
 dic = dicomread(dicom_file_string);
-no_of_frames = size(dic, 4)
-
+[x_pixels, y_pixels, ~, no_of_frames] = size(dic);
 
 % Create a figure
 analysis_figure = figure(1);
 clf;
-no_of_rows = 4;
+no_of_rows = 3;
 no_of_cols = 4;
 
 wall_thickness = NaN*ones(no_of_frames, no_of_angles);
 
 % Loop through frames
-for frame_counter = 11 : no_of_frames
+for frame_counter = frame_number : frame_number
     
     % Load frame as double
     im_f = double(dic(:,:,frame_counter));
@@ -68,6 +75,11 @@ for frame_counter = 11 : no_of_frames
     % Scan through rotations
     ang = linspace(0, 360, no_of_angles);
     for angle_counter = 1 : no_of_angles
+        
+%         if (angle_counter ~= 16)
+%             continue
+%         end
+        
         % Rotate the image
         im_rot = rotateAround(im_lv_filled, ...
             lv_centroid(2), lv_centroid(1), ang(angle_counter));
@@ -75,13 +87,13 @@ for frame_counter = 11 : no_of_frames
         % Get a line profile
         c = 1:lv_centroid(2);
         ro = lv_centroid(1);
-        p_y = im_rot(c, ro);
+        p_y = mean(im_rot(c, ro+[-strip_width:strip_width]),2);
         p_x = 1:numel(p_y);
         
         % Find peaks and troughs
         pd = find_peaks('x', p_x, 'y', p_y, ...
-                'min_rel_delta_y', 0.05, ...
-                'min_x_index_spacing', 5);
+                'min_rel_delta_y', min_peak_depth, ...
+                'min_x_index_spacing', 1);
 
         % Last trough
         x_last_trough = pd.min_indices(end);
@@ -89,7 +101,7 @@ for frame_counter = 11 : no_of_frames
         x_last_peak = pd.max_indices(end);
         % Thresh is wall_threshold betwee between
         wall_thresh = double(p_y(x_last_trough) + ...
-            wall_prop_thresh * (p_y(x_last_peak) - p_y(x_last_trough)))
+            wall_prop_thresh * (p_y(end) - p_y(x_last_trough)))
         
         % Find last point
         x_out = find((p_y > wall_thresh) & (p_x < x_last_trough)', ...
@@ -97,52 +109,36 @@ for frame_counter = 11 : no_of_frames
         x_in = find((p_y > wall_thresh) & (p_x > x_last_trough)', ...
                     1, 'first');
                 
+        if (isempty(x_in)|(isempty(x_out)))                
+    figure(2);
+    clf
+    plot(p_y,'b-');
+    error('ken');
+end
+
+        display_angle_images(subplot_counter+1);
+        
+        
+        % Deduce the wall thickness and save in array
         wall_thickness(frame_counter, angle_counter) = [x_in - x_out];                
 
-
-        
-        display_angle_images(subplot_counter+1);
         drawnow;
-        
-        if (1)
-            break
+        pause(0.2);
+   
+        if (video_output)
+            fr = getframe(gcf);
+            writeVideo(v,fr);
         end
     end
     
     if (1)
         break
     end
+    
+    if (video_output)
+        close(v);
+    end
 end
-%         
-%         im_rot = rotateAround(im_lv_filtered, ...
-%             lv_centroid(2), lv_centroid(1), ang(r));
-%         
-%         % Get a line profile
-%         c = 1:lv_centroid(2);
-%         ro = lv_centroid(1);
-%         p_y = im_rot(c, ro);
-%         p_x = 1:numel(p_y);
-%         
-%         % Find peaks and troughs
-%         pd = find_peaks('x', p_x, 'y', p_y, ...
-%                 'min_rel_delta_y', 0.05, ...
-%                 'min_x_index_spacing', 5);
-% 
-%         % Last trough
-%         x_last_trough = pd.min_indices(end);
-%         % Last peak
-%         x_last_peak = pd.max_indices(end);
-%         % Thresh is wall_threshold betwee between
-%         wall_thresh = double(p_y(x_last_trough) + ...
-%             wall_prop_thresh * (p_y(x_last_peak) - p_y(x_last_trough)))
-%         
-%         % Find last point
-%         x_out = find((p_y > wall_thresh) & (p_x < x_last_trough)', ...
-%                     1, 'last');
-%         x_in = find((p_y > wall_thresh) & (p_x > x_last_trough)', ...
-%                     1, 'first');
-%                 
-%         wall_thickness(i, r) = [x_in - x_out];                
 
         % Nested function
         function subplot_counter = display_frame_images()
@@ -242,11 +238,13 @@ end
             plot(p_x, p_y, 'r-');
             hold on;
             plot(p_x([1 end]), wall_thresh*[1 1], 'c-');
+            plot(x_last_peak, p_y(x_last_peak), 'co');
+            plot(x_last_trough, p_y(x_last_trough), 'co');
             plot(x_out, p_y(x_out), 'bo');
             plot(x_in, p_y(x_in), 'go');
             title('Line profile');
             
-            % Plot the line profile
+            % Plot a zoom
             subplot_counter = subplot_counter + 1;
             subplot(no_of_rows, no_of_cols, subplot_counter);
             colormap(gray);
@@ -258,61 +256,24 @@ end
             plot(lv_centroid(1)*[1 1], [1 lv_centroid(2)], 'r-');
             plot(lv_centroid(1), x_out, 'bo');
             plot(lv_centroid(1), x_in, 'go');
-            title('Rotated frame');
-            x_limits = lv_centroid(1) + -2*x_out
-            xlim(lv_centroid(1) + -2*[x_);
-            ylim([50 150]
+            x_limits = lv_centroid(1) + 2 * (lv_centroid(1) - x_out) * [-1 1];
+            x_limits(x_limits<1)=1;
+            x_limits(x_limits>x_pixels)=x_pixels;
+            xlim(x_limits);
+            y_limits = lv_centroid(2) + 2 * (lv_centroid(2) - x_out) * [-1 1];
+            y_limits(y_limits<1)=1;
+            y_limits(y_limits>y_pixels)=y_pixels;
+            ylim(y_limits);
+            title('Zoom');
             
-            
-            
-%             imagesc(im_lv_filled);
-%             hold on;
-%             plot(lv_centroid(1), lv_centroid(2), 'ro');
-% 
-%             title('LV filled');
-
-            
+            % Plot a zoom
+            subplot_counter = subplot_counter + 1;
+            subplot(no_of_rows, no_of_cols, subplot_counter);
+            hold on;
+            cm = paruly(no_of_frames);
+            plot(ang, wall_thickness(frame_counter, :), '-o', ...
+                'Color', cm(frame_counter, :));
+            xlabel('Angle');
+            ylabel('Wall thickness');            
         end
-
-        
-%         plot(lv_seed(1), lv_seed(2), 'r+');
-% 
-%         subplot(no_of_rows, no_of_cols, 2);
-%         cla
-%         imagesc(im_bw);
-% 
-%         subplot(no_of_rows, no_of_cols, 3);
-%         cla
-%         imagesc(im_lv_bw);
-% 
-%         subplot(no_of_rows, no_of_cols, 4);
-%         cla
-%         imagesc(im_rot);
-%         hold on;
-%         plot(lv_centroid(1), lv_centroid(2), 'm+');
-%         plot(lv_centroid(1), p_x(x_out), 'yo');
-%         plot(lv_centroid(1), p_x(x_in), 'go');
-% 
-% 
-%         subplot(no_of_rows, no_of_cols, 5);
-%         cla
-%         plot(p_x, p_y, 'b-');
-%         hold on;
-%         plot(p_x(x_last_trough), p_y(x_last_trough), 'ro');
-%         plot(p_x([1 end]), wall_thresh*[1 1],'c-');
-%         plot(p_x(x_last_peak), p_y(x_last_peak), 'rd');
-%         plot(p_x(x_out), p_y(x_out), 'gd');
-%         plot(p_x(x_in), p_y(x_in), 'gs');
-%         
-%         subplot(no_of_rows, no_of_cols, 6);
-%         hold on
-%         cm = paruly(no_of_frames);
-%         plot(ang, wall_thickness(i,:),'-','Color',cm(i,:));
-%         xlabel('Rotation Angle');
-%         ylabel('Wall thickness');
-% 
-%         drawnow;
-% %         pause(0.2);
-%         fr = getframe(gcf);
-%         writeVideo(v,fr);
 end

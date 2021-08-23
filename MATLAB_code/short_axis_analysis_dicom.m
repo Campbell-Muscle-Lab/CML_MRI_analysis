@@ -1,16 +1,23 @@
 function short_axis_analysis
 
 % Variables
-dicom_file_string = 'c:\temp\dicom.dcm';
+dicom_file_string = '../data/7-30-21-_scan1_ED10/SA_1/2.dcm';
+frame_number = 11;
 no_of_segmentation_levels = 6;
 no_of_angles = 50;
+strip_width = 0;
 min_peak_depth = 0.025;
-
 wall_prop_thresh = 0.5;
- 
-v = VideoWriter('example_analysis_2', 'Motion JPEG 2000');
-v.FrameRate = 3;
-open(v);
+
+video_output_file = '../output/example_analysis.avi'
+video_output = 1;
+
+
+if (video_output)
+    v = VideoWriter(video_output_file);
+    v.FrameRate = 2;
+    open(v);
+end
 
 % Code
 
@@ -27,7 +34,7 @@ no_of_cols = 4;
 wall_thickness = NaN*ones(no_of_frames, no_of_angles);
 
 % Loop through frames
-for frame_counter = 11 : no_of_frames
+for frame_counter = frame_number : frame_number
     
     % Load frame as double
     im_f = double(dic(:,:,frame_counter));
@@ -68,6 +75,7 @@ for frame_counter = 11 : no_of_frames
     % Scan through rotations
     ang = linspace(0, 360, no_of_angles);
     for angle_counter = 1 : no_of_angles
+        
         % Rotate the image
         im_rot = rotateAround(im_lv_filled, ...
             lv_centroid(2), lv_centroid(1), ang(angle_counter));
@@ -75,7 +83,11 @@ for frame_counter = 11 : no_of_frames
         % Get a line profile
         c = 1:lv_centroid(2);
         ro = lv_centroid(1);
-        p_y = im_rot(c, ro);
+        if (strip_width>0)
+            p_y = mean(im_rot(c, ro+[-strip_width:strip_width]),2);
+        else
+            p_y = im_rot(c, ro);
+        end
         p_x = 1:numel(p_y);
         
         % Find peaks and troughs
@@ -89,31 +101,39 @@ for frame_counter = 11 : no_of_frames
         x_last_peak = pd.max_indices(end);
         % Thresh is wall_threshold betwee between
         wall_thresh = double(p_y(x_last_trough) + ...
-            wall_prop_thresh * (p_y(x_last_peak) - p_y(x_last_trough)))
+            wall_prop_thresh * (p_y(end) - p_y(x_last_trough)));
         
         % Find last point
         x_out = find((p_y > wall_thresh) & (p_x < x_last_trough)', ...
                     1, 'last');
         x_in = find((p_y > wall_thresh) & (p_x > x_last_trough)', ...
                     1, 'first');
+                
+        if (isempty(x_in)||isempty(x_out))
+            continue;
+        end
 
+        display_angle_images(subplot_counter+1);
+        
         % Deduce the wall thickness and save in array
         wall_thickness(frame_counter, angle_counter) = [x_in - x_out];                
 
-        display_angle_images(subplot_counter+1);
         drawnow;
         pause(0.2);
-        
-        fr = getframe(gcf);
-        writeVideo(v,fr);
-
+   
+        if (video_output)
+            fr = getframe(gcf);
+            writeVideo(v,fr);
+        end
     end
     
     if (1)
         break
     end
     
-    close(v);
+    if (video_output)
+        close(v);
+    end
 end
 
         % Nested function
@@ -232,11 +252,11 @@ end
             plot(lv_centroid(1)*[1 1], [1 lv_centroid(2)], 'r-');
             plot(lv_centroid(1), x_out, 'bo');
             plot(lv_centroid(1), x_in, 'go');
-            x_limits = lv_centroid(1) + 2 * (lv_centroid(1) - x_out) * [-1 1]
+            x_limits = lv_centroid(1) + 2 * (lv_centroid(1) - x_out) * [-1 1];
             x_limits(x_limits<1)=1;
             x_limits(x_limits>x_pixels)=x_pixels;
             xlim(x_limits);
-            y_limits = lv_centroid(2) + 2 * (lv_centroid(2) - x_out) * [-1 1]
+            y_limits = lv_centroid(2) + 2 * (lv_centroid(2) - x_out) * [-1 1];
             y_limits(y_limits<1)=1;
             y_limits(y_limits>y_pixels)=y_pixels;
             ylim(y_limits);
