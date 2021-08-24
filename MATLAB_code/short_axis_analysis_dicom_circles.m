@@ -2,17 +2,34 @@ function short_axis_analysis
 
 % Variables
 
-dicom_file_string = '../data/enIm10.dcm';
+dicom_file_string = '../data/enIm5.dcm';
 frame_number=8;
 
+% Gauss filter SD
+gauss_filter_sd = 0.5;
+
+% Radius range for initial search
 radius_range = [10 100];
 n_circles = 1;
+circle_expansion = 2;   % big enough to include both ventricles
 
-ll = [50 150];
+% Adaptive contouring
+contour_contrast = [0 0.5]; % Contour contrast enhancement
+no_of_iterations = 100;
+smooth_factor = 0.5;
+contraction_bias = -0.5;
 
-lv_angles = linspace(-60, 20, 10);
+% Display
+zoom_limits = [50 150];
 
-rv_angles = linspace(140, 200, 10);
+% Angles and thresholds to scan for septal and opposite epicardial walls
+septal_angles = linspace(-60, 20, 10);
+septal_peak_prominence = 0.1;
+
+opposite_angles = linspace(140, 180, 10);
+opposite_peak_prominence = 0.1;
+opposite_threshold = 0.5;
+
 
 % Code
 
@@ -32,8 +49,11 @@ wall_thickness = NaN*ones(no_of_frames, 1);
 for frame_counter = frame_number : frame_number
     
     % Load frame as double and normalize
-    im_f = double(dic(:,:,frame_counter));
-    im_f = im_f./max(im_f(:));
+    im_raw = double(dic(:,:,frame_counter));
+    im_raw = im_raw./max(im_raw(:));
+    
+    % Smooth
+    im_f = imgaussfilt(im_raw, gauss_filter_sd);
     
     % Find circles
     [centers, radii] = imfindcircles(im_f, radius_range,'ObjectPolarity','bright');
@@ -43,118 +63,155 @@ for frame_counter = frame_number : frame_number
     for i = 1:x_pixels
         for j = 1:x_pixels
             h = hypot(i-centers(1,1),j-centers(1,2));
-            if (h<(3*radii(1)))
+            if (h<(circle_expansion*radii(1)))
                 im_circle(j,i)=1;
             end
         end
     end
     
+    % Calculate std of image, adaptive binarize, and thicken edges
+    % This should enclose LV and RV in white rings
     im_std = imadjust(stdfilt(im_f,true(3)));
     im_std_2 = imbinarize(im_std,'adaptive');
     im_std_3 = imclose(im_std_2,strel('disk',1));
     
-    % Image ventricles
-    im_ventricles = im_std_3;
-    im_ventricles(~im_circle)=0;
-    
-    im_filled_ventricles = imcomplement(imfill(im_ventricles,[1 1]));
+    % Restrict edge picture to circular mask
+    im_std_3(~im_circle)=0;
+    % Fill in from edges so that we just have the LV and RV rings
+    im_filled_ventricles = imcomplement(imfill(im_std_3,[1 1]));
+    % Keep 2 largest components, should be RV (top) and LV (bottom)
     im_filled_ventricles = bwareafilt(im_filled_ventricles,2);
+    im_filled_ventricles = imfill(im_filled_ventricles,'holes');
     
     % Find LV and RV
     im_L = bwlabel(im_filled_ventricles);
+    % Adapt image for active contouring
+    im_cont = imcomplement(im_f);
+    im_cont = imadjust(im_cont, contour_contrast, [0 1]);
+    im_cont(~im_circle)=1;
     
-    im_cont = imcomplement(imadjust(im_f,[0.5 1],[0 1]));
-%     n=3;
-%     se = ones(n); se = se/sum(se(:));
-%     im_cont = conv2(im_cont, se, 'same');
-    
-    ni=100;
+    % Now do active contouring for both RV (1) and LV (2)
     for i = 1 : 2
         im_m = zeros(size(im_L));
         im_m(im_L==i)=1;
         im_mask{i} = im_m;
-        im_c{i} = activecontour(im_cont, im_mask{i}, ni, 'Chan-Vese', ...
-            'SmoothFactor',0.5, ...
-            'ContractionBias',-0.5);
+        im_c{i} = activecontour(im_cont, im_mask{i}, no_of_iterations, ...
+            'Chan-Vese', ...
+            'SmoothFactor', smooth_factor, ...
+            'ContractionBias', contraction_bias);
     end
     
+    % Find the centroid
     lv_props = regionprops(im_c{2}, {'Centroid'});
-    temp = cat(1, lv_props)
-    lv_centroid = round(temp(1).Centroid)
+    temp = cat(1, lv_props);
+    lv_centroid = round(temp(1).Centroid);
 
     % Display frame images
     subplot_counter = display_frame_images()
 
     % Loop through lv angles
-    for lv_counter = 1:numel(lv_angles)
-        im_rot = rotateAround(im_f, lv_centroid(2), lv_centroid(1), lv_angles(lv_counter));
+    for septal_counter = 1:numel(septal_angles)
         
+        % Rotate the image around the centroid
+        im_rot = rotateAround(im_f, lv_centroid(2), lv_centroid(1), ...
+                    septal_angles(septal_counter));
+        
+        % Pull of a line profile
         p_r = 1:lv_centroid(2);
         p_z = im_rot(p_r, lv_centroid(1));
         p_z(end)=0;
         
-        [~, p_loc]=findpeaks(p_z, 'MinPeakProminence',0.1*max(p_z));
+        % Find peaks and troughs marking the septum
+        [~, p_loc]=findpeaks(p_z, 'MinPeakProminence', ...
+                        septal_peak_prominence*max(p_z));
         p_loc = p_loc(end-1:end);
-        [~, t_loc]=findpeaks(-p_z, 'MinPeakProminence',0.1*max(p_z));
+        [~, t_loc]=findpeaks(-p_z, 'MinPeakProminence', ...
+                        septal_peak_prominence*max(p_z));
         t_loc = t_loc(end);
         
+        % Set a threshold
         th = mean(p_z([p_loc(end) t_loc(end)]));
         
-        ind = find((p_z>th)&(p_r < t_loc(end))', 1, 'last')
-        lz(lv_counter) = numel(p_z)-ind
+        % Find the outside of the wall
+        ind = find((p_z>th)&(p_r < t_loc(end))', 1, 'last');
+        sr(septal_counter) = numel(p_z)-ind;
        
-        display_angle_images(subplot_counter+1);
+        display_angle_images(subplot_counter+1, 'Septal');
     end
     
     % Loop through rv angles
-    for rv_counter = 1:numel(rv_angles)
-        im_rot = rotateAround(im_f, lv_centroid(2), lv_centroid(1), rv_angles(rv_counter));
+    for opposite_counter = 1:numel(opposite_angles)
         
+        % Rotate the image around the centroid
+        im_rot = rotateAround(im_f, lv_centroid(2), lv_centroid(1), ...
+                    opposite_angles(opposite_counter));
+        
+        % Pull off a line profile
         p_r = 1:lv_centroid(2);
         p_z = im_rot(p_r, lv_centroid(1));
         p_z(end)=0;
         
-        [~, p_loc]=findpeaks(p_z, 'MinPeakProminence',0.1*max(p_z));
-        th = 0.25 * p_z(p_loc(end));
+        % Find peak corresponding to LV
+        [~, p_loc]=findpeaks(p_z, 'MinPeakProminence', ...
+                    opposite_peak_prominence*max(p_z));
+        % Set a threshold for the far side of the LV wall
+        th = opposite_threshold * p_z(p_loc(end));
         
-        ind = find((p_z<th)&(p_r < t_loc(end))', 1, 'last')
-        rz(lv_counter) = numel(p_z)-ind
+        ind = find((p_z<th)&(p_r < t_loc(end))', 1, 'last');
+        or(opposite_counter) = numel(p_z)-ind;
        
-%         display_angle_images(subplot_counter+1);
+        display_angle_images(subplot_counter+3, 'Opposite');
     end
     
     figure(2);
     clf
-    subplot(1,2,1);
-    imagesc(im_f);
+    subplot(1,3,1);
+    imagesc(im_raw);
+    title('Raw');
    
-    ax = subplot(1,2,2)
+    subplot(1,3,2);
+    imagesc(im_f);
+    title(sprintf('Filtered with Gaussian SD of %.2f',gauss_filter_sd));
+    
+    ax = subplot(1,3,3)
     colormap(gray);
     hold on;
     g = repmat(zeros(size(im_f)),[1 1 3]);
     g(:,:,2)=1;
     imagesc(im_f);
+    title('Analysis result');
     h = image(g);
     set(h, 'AlphaData', 0.5*(im_c{2} + im_c{1}));
     plot(lv_centroid(1), lv_centroid(2), 'ro');
-    for lv_counter = 1 : numel(lv_angles)
-        lx(lv_counter) = lv_centroid(1) + lz(lv_counter)*sind(lv_angles(lv_counter))
-        ly(lv_counter) = lv_centroid(2) - lz(lv_counter)*cosd(lv_angles(lv_counter))
+    for septal_counter = 1 : numel(septal_angles)
+        sx(septal_counter) = lv_centroid(1) + sr(septal_counter)*sind(septal_angles(septal_counter))
+        sy(septal_counter) = lv_centroid(2) - sr(septal_counter)*cosd(septal_angles(septal_counter))
     end
-    plot(lx, ly, 'bo');
+    plot(sx, sy, 'bo');
 
-    for rv_counter = 1 : numel(rv_angles)
-        rx(rv_counter) = lv_centroid(1) + rz(lv_counter)*sind(rv_angles(rv_counter))
-        ry(rv_counter) = lv_centroid(2) - rz(lv_counter)*cosd(rv_angles(rv_counter))
+    for opposite_counter = 1 : numel(opposite_angles)
+        ox(opposite_counter) = lv_centroid(1) + or(opposite_counter)*sind(opposite_angles(opposite_counter))
+        oy(opposite_counter) = lv_centroid(2) - or(opposite_counter)*cosd(opposite_angles(opposite_counter))
     end
-    plot(rx, ry, 'go');
+    plot(ox, oy, 'go');
     
-    xe = [lx rx];
-    ye = [ly ry];
+    % Coordinates for ellipse
+    xe = [sx ox];
+    ye = [sy oy];
     
-    fit_ellipse(xe',ye',ax)
+    e_out = fit_ellipse(xe',ye')
     
+    % Draw the ellipse
+    R = [ e_out.cos_phi e_out.sin_phi ; -e_out.sin_phi e_out.cos_phi ];
+    theta_r         = linspace(0,2*pi);
+    ellipse_x_r     = e_out.X0 + e_out.a*cos(theta_r);
+    ellipse_y_r     = e_out.Y0 + e_out.b*sin(theta_r);
+    rotated_ellipse = R * [ellipse_x_r;ellipse_y_r];
+    
+    plot(rotated_ellipse(1,:), rotated_ellipse(2,:), 'y-', 'LineWidth',2);
+  
     xlim([1 x_pixels]);
+    ylim([1 y_pixels]);
     set(gca, 'YDir', 'reverse');
 
 
@@ -210,7 +267,7 @@ end
             colormap(gray);
             cla;
             imagesc(im_std);
-            title('std');
+            title('std - Standard deviation');
             colorbar;
 
             % Frangi ventricles
@@ -219,7 +276,7 @@ end
             colormap(gray);
             cla;
             imagesc(im_std_2);
-            title('std2');
+            title('std2 - Opened to thicken');
             colorbar;
 
 
@@ -228,15 +285,7 @@ end
             colormap(gray);
             cla;
             imagesc(im_std_3);
-            title('std3');
-            colorbar;
-
-            % ventricles
-            subplot_counter = subplot_counter + 1;
-            subplot(no_of_rows, no_of_cols, subplot_counter);
-            colormap(gray);
-            cla;
-            imagesc(im_ventricles);
+            title('std3 - Restricted to circle');
             colorbar;
             
             % ventricles
@@ -246,6 +295,7 @@ end
             cla;
             imagesc(im_filled_ventricles);
             colorbar;
+            title('LV and RV seeds')
 
             
             % Edges
@@ -254,6 +304,16 @@ end
             colormap(gray);
             imagesc(im_L);
             colorbar;
+            title('LV and RV labels');
+
+            % Edges
+            subplot_counter = subplot_counter + 1;
+            subplot(no_of_rows, no_of_cols, subplot_counter);
+            colormap(gray);
+            imagesc(im_cont);
+            colorbar;
+            title('Image for adaptive contouring');
+
             
             % Edges
             subplot_counter = subplot_counter + 1;
@@ -266,14 +326,14 @@ end
                 visboundaries(im_c{i},'Color',cm(i,:));
             end
             plot(lv_centroid(1), lv_centroid(2), 'ro');
-            xlim([ll(1) ll(2)]);
-            ylim([ll(1) ll(2)]);
+            xlim([zoom_limits(1) zoom_limits(2)]);
+            ylim([zoom_limits(1) zoom_limits(2)]);
             colorbar;
             title('Ventricles');
             
         end
 
-        function display_angle_images(subplot_counter)
+        function display_angle_images(subplot_counter, sub_title)
 
             % Rotated frame
             subplot(no_of_rows, no_of_cols, subplot_counter);
@@ -283,11 +343,9 @@ end
             colorbar;
             hold on;
             plot(lv_centroid(1), lv_centroid(2), 'ro');
-%             plot(lv_centroid(1)*[1 1], [1 lv_centroid(2)], 'r-');
-%             plot(lv_centroid(1), x_out, 'bo');
-%             plot(lv_centroid(1), x_in, 'go');
-            title('Rotated frame');
-% 
+            plot(lv_centroid(1)*[1 1], [1 lv_centroid(2)], 'b-');
+            title([sub_title '-rotated frame']);
+ 
             % Plot the line profile
             subplot_counter = subplot_counter + 1;
             subplot(no_of_rows, no_of_cols, subplot_counter);
@@ -299,45 +357,6 @@ end
             plot(p_r(t_loc), p_z(t_loc), 'ro');
             plot(p_r([1 end]), th*[1 1], 'c-');
             plot(p_r(ind), p_z(ind), 'mo');
-            
-%             hold on;
-%             plot(p_x([1 end]), wall_thresh*[1 1], 'c-');
-%             plot(x_last_peak, p_y(x_last_peak), 'co');
-%             plot(x_last_trough, p_y(x_last_trough), 'co');
-%             plot(x_out, p_y(x_out), 'bo');
-%             plot(x_in, p_y(x_in), 'go');
-            title('Line profile');
-%             
-%             % Plot a zoom
-%             subplot_counter = subplot_counter + 1;
-%             subplot(no_of_rows, no_of_cols, subplot_counter);
-%             colormap(gray);
-%             cla;
-%             imagesc(im_rot);
-%             colorbar;
-%             hold on;
-%             plot(lv_centroid(1), lv_centroid(2), 'r+');
-%             plot(lv_centroid(1)*[1 1], [1 lv_centroid(2)], 'r-');
-%             plot(lv_centroid(1), x_out, 'bo');
-%             plot(lv_centroid(1), x_in, 'go');
-%             x_limits = lv_centroid(1) + 2 * (lv_centroid(1) - x_out) * [-1 1];
-%             x_limits(x_limits<1)=1;
-%             x_limits(x_limits>x_pixels)=x_pixels;
-%             xlim(x_limits);
-%             y_limits = lv_centroid(2) + 2 * (lv_centroid(2) - x_out) * [-1 1];
-%             y_limits(y_limits<1)=1;
-%             y_limits(y_limits>y_pixels)=y_pixels;
-%             ylim(y_limits);
-%             title('Zoom');
-%             
-%             % Plot a zoom
-%             subplot_counter = subplot_counter + 1;
-%             subplot(no_of_rows, no_of_cols, subplot_counter);
-%             hold on;
-%             cm = paruly(no_of_frames);
-%             plot(ang, wall_thickness(frame_counter, :), '-o', ...
-%                 'Color', cm(frame_counter, :));
-%             xlabel('Angle');
-%             ylabel('Wall thickness');            
+            title([sub_title '-line profile']);
         end
 end
