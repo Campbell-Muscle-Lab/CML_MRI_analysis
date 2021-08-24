@@ -2,13 +2,17 @@ function short_axis_analysis
 
 % Variables
 
-dicom_file_string = '../data/enIm9.dcm';
+dicom_file_string = '../data/enIm10.dcm';
 frame_number=8;
 
-radius_range = [5 100];
+radius_range = [10 100];
 n_circles = 1;
 
 ll = [50 150];
+
+lv_angles = linspace(-60, 20, 10);
+
+rv_angles = linspace(140, 200, 10);
 
 % Code
 
@@ -22,7 +26,7 @@ clf;
 no_of_rows = 4;
 no_of_cols = 4;
 
-% wall_thickness = NaN*ones(no_of_frames, no_of_angles);
+wall_thickness = NaN*ones(no_of_frames, 1);
 
 % Loop through frames
 for frame_counter = frame_number : frame_number
@@ -74,67 +78,87 @@ for frame_counter = frame_number : frame_number
             'ContractionBias',-0.5);
     end
     
-    im_d = imdilate(im_filled_ventricles,strel('disk',3));
-    rp = regionprops(im_d,'PixelIdxList');
-    im_cv = zeros(size(im_f));
-    im_cv(rp(1).PixelIdxList)=1;
-    im_cv2 = im_cv;
-    im_cv2(im_mask{1}==1)=0;
-    im_cv2(im_mask{2}==1)=0;
-    
-    mm = mean(im_f(im_cv2>0));
-    
-    
-    im_v = im_f;
-    im_v(im_mask{1}>0)=mm;
-    im_v = imadjust(im_v,[0 1],[0 1]);
-% 
-%     % Find blob below lv
-%     rp = regionprops(im_L, {'centroid'});
-%     cent = cat(1,rp.Centroid);
-%     lv_cent = round(cent(2,:))
-%     
-%     im_std_2_circle = im_std_2;
-%     im_std_2_circle(~im_circle)=0;
-%     im_std_2_circle = bwareafilt(im_std_2_circle,[10 inf]);
-%     im_L2 = bwlabel(im_std_2_circle);
-%     % Find blob below LV
-%     p = im_L2(1:end, lv_cent(1));
-%     p2 = p(lv_cent(2):end);
-%     p2 = p2(p2>0)
-%     p2(diff(p2)==0)=[];
-%     
-%     im_bot = im_L2;
-%     im_bot(im_L2~=p2(2))=0;
-%     
-%     % Superpose bottom
-%     im_bot_2 = imoverlay(im_f, im_bot, 'g');
-%     
-    
-    
-%     
-%     % Make lv_seed
-%     ss = size(im_f)
-%     
-%     im_mask = zeros(size(im_f));
-%     c = round(centers(1,:))
-%     im_mask(c(2),c(1))=1;
-%     im_mask = imdilate(im_mask,strel('disk',10));
-%     
-%     ni = 100;
-%     im_contour = im_f;
-%     im_contour = 100*imadjust(im_contour, [0.0 1],[0 1]);
-%     im_ac = activecontour(im_contour, im_mask, ni, 'Chan-Vese', ...
-%                 'SmoothFactor',0.5);
+    lv_props = regionprops(im_c{2}, {'Centroid'});
+    temp = cat(1, lv_props)
+    lv_centroid = round(temp(1).Centroid)
 
     % Display frame images
     subplot_counter = display_frame_images()
+
+    % Loop through lv angles
+    for lv_counter = 1:numel(lv_angles)
+        im_rot = rotateAround(im_f, lv_centroid(2), lv_centroid(1), lv_angles(lv_counter));
+        
+        p_r = 1:lv_centroid(2);
+        p_z = im_rot(p_r, lv_centroid(1));
+        p_z(end)=0;
+        
+        [~, p_loc]=findpeaks(p_z, 'MinPeakProminence',0.1*max(p_z));
+        p_loc = p_loc(end-1:end);
+        [~, t_loc]=findpeaks(-p_z, 'MinPeakProminence',0.1*max(p_z));
+        t_loc = t_loc(end);
+        
+        th = mean(p_z([p_loc(end) t_loc(end)]));
+        
+        ind = find((p_z>th)&(p_r < t_loc(end))', 1, 'last')
+        lz(lv_counter) = numel(p_z)-ind
+       
+        display_angle_images(subplot_counter+1);
+    end
     
-    % Scan through rotations
-%     ang = linspace(0, 360, no_of_angles);
-%     for angle_counter = 1 : no_of_angles
-%     end
-%     
+    % Loop through rv angles
+    for rv_counter = 1:numel(rv_angles)
+        im_rot = rotateAround(im_f, lv_centroid(2), lv_centroid(1), rv_angles(rv_counter));
+        
+        p_r = 1:lv_centroid(2);
+        p_z = im_rot(p_r, lv_centroid(1));
+        p_z(end)=0;
+        
+        [~, p_loc]=findpeaks(p_z, 'MinPeakProminence',0.1*max(p_z));
+        th = 0.25 * p_z(p_loc(end));
+        
+        ind = find((p_z<th)&(p_r < t_loc(end))', 1, 'last')
+        rz(lv_counter) = numel(p_z)-ind
+       
+%         display_angle_images(subplot_counter+1);
+    end
+    
+    figure(2);
+    clf
+    subplot(1,2,1);
+    imagesc(im_f);
+   
+    ax = subplot(1,2,2)
+    colormap(gray);
+    hold on;
+    g = repmat(zeros(size(im_f)),[1 1 3]);
+    g(:,:,2)=1;
+    imagesc(im_f);
+    h = image(g);
+    set(h, 'AlphaData', 0.5*(im_c{2} + im_c{1}));
+    plot(lv_centroid(1), lv_centroid(2), 'ro');
+    for lv_counter = 1 : numel(lv_angles)
+        lx(lv_counter) = lv_centroid(1) + lz(lv_counter)*sind(lv_angles(lv_counter))
+        ly(lv_counter) = lv_centroid(2) - lz(lv_counter)*cosd(lv_angles(lv_counter))
+    end
+    plot(lx, ly, 'bo');
+
+    for rv_counter = 1 : numel(rv_angles)
+        rx(rv_counter) = lv_centroid(1) + rz(lv_counter)*sind(rv_angles(rv_counter))
+        ry(rv_counter) = lv_centroid(2) - rz(lv_counter)*cosd(rv_angles(rv_counter))
+    end
+    plot(rx, ry, 'go');
+    
+    xe = [lx rx];
+    ye = [ly ry];
+    
+    fit_ellipse(xe',ye',ax)
+    
+    xlim([1 x_pixels]);
+    set(gca, 'YDir', 'reverse');
+
+
+    
     if (1)
         break
     end
@@ -241,92 +265,11 @@ end
             for i=1:2
                 visboundaries(im_c{i},'Color',cm(i,:));
             end
+            plot(lv_centroid(1), lv_centroid(2), 'ro');
             xlim([ll(1) ll(2)]);
             ylim([ll(1) ll(2)]);
             colorbar;
             title('Ventricles');
-            
-            % CV
-            subplot_counter = subplot_counter + 1;
-            subplot(no_of_rows, no_of_cols, subplot_counter);
-            imagesc(im_cv);
-            colorbar;
-            
-             % CV
-            subplot_counter = subplot_counter + 1;
-            subplot(no_of_rows, no_of_cols, subplot_counter);
-            imagesc(im_v);
-            xlim([ll(1) ll(2)]);
-            ylim([ll(1) ll(2)]);
-            colorbar;
-%             
-%             % L2 profile
-%             subplot_counter = subplot_counter + 1;
-%             subplot(no_of_rows, no_of_cols, subplot_counter);
-%             plot(p);
-%             colorbar;
-%             
-%             % L2 profile
-%             subplot_counter = subplot_counter + 1;
-%             subplot(no_of_rows, no_of_cols, subplot_counter);
-%             imagesc(im_bot);
-%             colorbar;
-%   
-%              % L2 profile
-%             subplot_counter = subplot_counter + 1;
-%             subplot(no_of_rows, no_of_cols, subplot_counter);
-%             imagesc(im_bot_2);
-%             colorbar;
-%             
-            
-            
-            
-            
-            % 
-%             % Ventricles
-%             subplot_counter = subplot_counter + 1;
-%             subplot(no_of_rows, no_of_cols, subplot_counter);
-%             colormap(gray);
-%             cla;
-%             imagesc(im_v)
-%             title('Ventricles');
-%             colorbar;
-% 
-%             % Ventricles
-%             subplot_counter = subplot_counter + 1;
-%             subplot(no_of_rows, no_of_cols, subplot_counter);
-%             cla;
-%             imagesc(im_l)
-%             title('Ventricles');
-%             colorbar;
-% 
-%             % Ventricles
-%             subplot_counter = subplot_counter + 1;
-%             subplot(no_of_rows, no_of_cols, subplot_counter);
-%             cla;
-%             imagesc(im_f_contour);
-% %             hold on;
-% %             cm = jet(3);
-% %             for ci=1:(max(im_l(:))+1)
-% %                 visboundaries(im_ac{ci}, 'Color', cm(ci,:));
-% %             end
-%             title('Ventricles');
-%             colorbar;
-% 
-%             
-% %             % Contour
-% %             subplot_counter = subplot_counter + 1;
-% %             subplot(no_of_rows, no_of_cols, subplot_counter);
-% %             colormap(gray);
-% %             cla;
-% %             imagesc(im_f_2);
-% %             hold on;
-% %             visboundaries(im_c_2, 'Color', 'r');
-% %             visboundaries(im_c_3, 'Color', 'b');
-% %             visboundaries(im_c_4, 'Color', 'g');
-% %             title('Contour');
-% %             colorbar;
-
             
         end
 
@@ -339,56 +282,62 @@ end
             imagesc(im_rot);
             colorbar;
             hold on;
-            plot(lv_centroid(1), lv_centroid(2), 'r+');
-            plot(lv_centroid(1)*[1 1], [1 lv_centroid(2)], 'r-');
-            plot(lv_centroid(1), x_out, 'bo');
-            plot(lv_centroid(1), x_in, 'go');
+            plot(lv_centroid(1), lv_centroid(2), 'ro');
+%             plot(lv_centroid(1)*[1 1], [1 lv_centroid(2)], 'r-');
+%             plot(lv_centroid(1), x_out, 'bo');
+%             plot(lv_centroid(1), x_in, 'go');
             title('Rotated frame');
-
+% 
             % Plot the line profile
             subplot_counter = subplot_counter + 1;
             subplot(no_of_rows, no_of_cols, subplot_counter);
             colormap(gray);
             cla;
-            plot(p_x, p_y, 'r-');
             hold on;
-            plot(p_x([1 end]), wall_thresh*[1 1], 'c-');
-            plot(x_last_peak, p_y(x_last_peak), 'co');
-            plot(x_last_trough, p_y(x_last_trough), 'co');
-            plot(x_out, p_y(x_out), 'bo');
-            plot(x_in, p_y(x_in), 'go');
+            plot(p_r, p_z, 'b-');
+            plot(p_r(p_loc), p_z(p_loc), 'go');
+            plot(p_r(t_loc), p_z(t_loc), 'ro');
+            plot(p_r([1 end]), th*[1 1], 'c-');
+            plot(p_r(ind), p_z(ind), 'mo');
+            
+%             hold on;
+%             plot(p_x([1 end]), wall_thresh*[1 1], 'c-');
+%             plot(x_last_peak, p_y(x_last_peak), 'co');
+%             plot(x_last_trough, p_y(x_last_trough), 'co');
+%             plot(x_out, p_y(x_out), 'bo');
+%             plot(x_in, p_y(x_in), 'go');
             title('Line profile');
-            
-            % Plot a zoom
-            subplot_counter = subplot_counter + 1;
-            subplot(no_of_rows, no_of_cols, subplot_counter);
-            colormap(gray);
-            cla;
-            imagesc(im_rot);
-            colorbar;
-            hold on;
-            plot(lv_centroid(1), lv_centroid(2), 'r+');
-            plot(lv_centroid(1)*[1 1], [1 lv_centroid(2)], 'r-');
-            plot(lv_centroid(1), x_out, 'bo');
-            plot(lv_centroid(1), x_in, 'go');
-            x_limits = lv_centroid(1) + 2 * (lv_centroid(1) - x_out) * [-1 1];
-            x_limits(x_limits<1)=1;
-            x_limits(x_limits>x_pixels)=x_pixels;
-            xlim(x_limits);
-            y_limits = lv_centroid(2) + 2 * (lv_centroid(2) - x_out) * [-1 1];
-            y_limits(y_limits<1)=1;
-            y_limits(y_limits>y_pixels)=y_pixels;
-            ylim(y_limits);
-            title('Zoom');
-            
-            % Plot a zoom
-            subplot_counter = subplot_counter + 1;
-            subplot(no_of_rows, no_of_cols, subplot_counter);
-            hold on;
-            cm = paruly(no_of_frames);
-            plot(ang, wall_thickness(frame_counter, :), '-o', ...
-                'Color', cm(frame_counter, :));
-            xlabel('Angle');
-            ylabel('Wall thickness');            
+%             
+%             % Plot a zoom
+%             subplot_counter = subplot_counter + 1;
+%             subplot(no_of_rows, no_of_cols, subplot_counter);
+%             colormap(gray);
+%             cla;
+%             imagesc(im_rot);
+%             colorbar;
+%             hold on;
+%             plot(lv_centroid(1), lv_centroid(2), 'r+');
+%             plot(lv_centroid(1)*[1 1], [1 lv_centroid(2)], 'r-');
+%             plot(lv_centroid(1), x_out, 'bo');
+%             plot(lv_centroid(1), x_in, 'go');
+%             x_limits = lv_centroid(1) + 2 * (lv_centroid(1) - x_out) * [-1 1];
+%             x_limits(x_limits<1)=1;
+%             x_limits(x_limits>x_pixels)=x_pixels;
+%             xlim(x_limits);
+%             y_limits = lv_centroid(2) + 2 * (lv_centroid(2) - x_out) * [-1 1];
+%             y_limits(y_limits<1)=1;
+%             y_limits(y_limits>y_pixels)=y_pixels;
+%             ylim(y_limits);
+%             title('Zoom');
+%             
+%             % Plot a zoom
+%             subplot_counter = subplot_counter + 1;
+%             subplot(no_of_rows, no_of_cols, subplot_counter);
+%             hold on;
+%             cm = paruly(no_of_frames);
+%             plot(ang, wall_thickness(frame_counter, :), '-o', ...
+%                 'Color', cm(frame_counter, :));
+%             xlabel('Angle');
+%             ylabel('Wall thickness');            
         end
 end
