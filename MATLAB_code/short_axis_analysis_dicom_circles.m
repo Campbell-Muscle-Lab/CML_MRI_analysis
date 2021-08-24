@@ -6,7 +6,7 @@ dicom_file_string = '../data/enIm5.dcm';
 frame_number=8;
 
 % Gauss filter SD
-gauss_filter_sd = 0.5;
+gauss_filter_sd = 1;
 
 % Radius range for initial search
 radius_range = [10 100];
@@ -24,12 +24,12 @@ zoom_limits = [50 150];
 
 % Angles and thresholds to scan for septal and opposite epicardial walls
 septal_angles = linspace(-60, 20, 10);
-septal_peak_prominence = 0.1;
+peak_prominence = 0.1;
 
 opposite_angles = linspace(140, 180, 10);
-opposite_peak_prominence = 0.1;
-opposite_threshold = 0.5;
+opposite_threshold = 0.4;
 
+interp_x = 0.1;
 
 % Code
 
@@ -43,8 +43,6 @@ clf;
 no_of_rows = 4;
 no_of_cols = 4;
 
-wall_thickness = NaN*ones(no_of_frames, 1);
-
 % Loop through frames
 for frame_counter = frame_number : frame_number
     
@@ -53,7 +51,11 @@ for frame_counter = frame_number : frame_number
     im_raw = im_raw./max(im_raw(:));
     
     % Smooth
-    im_f = imgaussfilt(im_raw, gauss_filter_sd);
+    if (gauss_filter_sd > 0)
+        im_f = imgaussfilt(im_raw, gauss_filter_sd);
+    else
+        im_f = im_raw;
+    end
     
     % Find circles
     [centers, radii] = imfindcircles(im_f, radius_range,'ObjectPolarity','bright');
@@ -109,58 +111,28 @@ for frame_counter = frame_number : frame_number
     % Display frame images
     subplot_counter = display_frame_images()
 
-    % Loop through lv angles
+    % Loop through septal angles
     for septal_counter = 1:numel(septal_angles)
         
         % Rotate the image around the centroid
         im_rot = rotateAround(im_f, lv_centroid(2), lv_centroid(1), ...
                     septal_angles(septal_counter));
+                
+        [sr(septal_counter), out] = profile_analysis('septum');
         
-        % Pull of a line profile
-        p_r = 1:lv_centroid(2);
-        p_z = im_rot(p_r, lv_centroid(1));
-        p_z(end)=0;
-        
-        % Find peaks and troughs marking the septum
-        [~, p_loc]=findpeaks(p_z, 'MinPeakProminence', ...
-                        septal_peak_prominence*max(p_z));
-        p_loc = p_loc(end-1:end);
-        [~, t_loc]=findpeaks(-p_z, 'MinPeakProminence', ...
-                        septal_peak_prominence*max(p_z));
-        t_loc = t_loc(end);
-        
-        % Set a threshold
-        th = mean(p_z([p_loc(end) t_loc(end)]));
-        
-        % Find the outside of the wall
-        ind = find((p_z>th)&(p_r < t_loc(end))', 1, 'last');
-        sr(septal_counter) = numel(p_z)-ind;
-       
-        display_angle_images(subplot_counter+1, 'Septal');
+        display_angle_images(subplot_counter + 1, 'septum', out);
     end
     
-    % Loop through rv angles
+    % Loop through opposite angles
     for opposite_counter = 1:numel(opposite_angles)
         
         % Rotate the image around the centroid
         im_rot = rotateAround(im_f, lv_centroid(2), lv_centroid(1), ...
                     opposite_angles(opposite_counter));
+                
+        [or(opposite_counter), out] = profile_analysis('opposite');
         
-        % Pull off a line profile
-        p_r = 1:lv_centroid(2);
-        p_z = im_rot(p_r, lv_centroid(1));
-        p_z(end)=0;
-        
-        % Find peak corresponding to LV
-        [~, p_loc]=findpeaks(p_z, 'MinPeakProminence', ...
-                    opposite_peak_prominence*max(p_z));
-        % Set a threshold for the far side of the LV wall
-        th = opposite_threshold * p_z(p_loc(end));
-        
-        ind = find((p_z<th)&(p_r < t_loc(end))', 1, 'last');
-        or(opposite_counter) = numel(p_z)-ind;
-       
-        display_angle_images(subplot_counter+3, 'Opposite');
+        display_angle_images(subplot_counter + 3, 'opposite', out);
     end
     
     figure(2);
@@ -224,8 +196,48 @@ for frame_counter = frame_number : frame_number
         close(v);
     end
 end
+        % Nested functions
+        function [ri, out] = profile_analysis(region_string)
+            % Returns epicardial radius
 
-        % Nested function
+            % Pull off line profile
+            p_r = 1:lv_centroid(2);
+            p_z = im_rot(p_r, lv_centroid(1));
+            p_z(end) = 0;
+            
+            % Interpolate
+            p_ri = 1:interp_x:p_r(end);
+            p_zi = interp1(p_r, p_z, p_ri, 'spline');
+            
+            % Find peaks and troughs
+            [~, p_loci]=findpeaks(p_zi, 'MinPeakProminence', ...
+                            peak_prominence*max(p_zi));
+            [~, t_loci]=findpeaks(-p_zi, 'MinPeakProminence', ...
+                            peak_prominence*max(p_zi));
+            
+            switch region_string
+                case 'septum'
+                    th = mean(p_zi([p_loci(end) t_loci(end)]));
+                    indi = find((p_zi>th)&(p_ri < p_ri(t_loci(end))), 1, 'last');
+                    ri = p_ri(numel(p_zi)-indi);
+                case 'opposite'
+                    % Set a threshold for the far side of the LV wall
+                    th = opposite_threshold * p_zi(p_loci(end));
+                    indi = find((p_zi<th)&(p_ri < p_ri(p_loci(end))), 1, 'last');
+                    ri = p_ri(numel(p_zi)-indi);
+            end
+            
+            out.p_r = p_r;
+            out.p_z = p_z;
+            out.p_ri = p_ri;
+            out.p_zi = p_zi;
+            out.p_loci = p_loci;
+            out.t_loci = t_loci;
+            out.th = th;
+            out.indi = indi;
+            
+        end
+
         function subplot_counter = display_frame_images()
 
             % Display
@@ -333,7 +345,7 @@ end
             
         end
 
-        function display_angle_images(subplot_counter, sub_title)
+        function display_angle_images(subplot_counter, sub_title, li)
 
             % Rotated frame
             subplot(no_of_rows, no_of_cols, subplot_counter);
@@ -352,11 +364,12 @@ end
             colormap(gray);
             cla;
             hold on;
-            plot(p_r, p_z, 'b-');
-            plot(p_r(p_loc), p_z(p_loc), 'go');
-            plot(p_r(t_loc), p_z(t_loc), 'ro');
-            plot(p_r([1 end]), th*[1 1], 'c-');
-            plot(p_r(ind), p_z(ind), 'mo');
+            plot(li.p_r, li.p_z, 'b-');
+            plot(li.p_ri, li.p_zi, 'm-');
+            plot(li.p_ri(li.p_loci), li.p_zi(li.p_loci), 'go');
+            plot(li.p_ri(li.t_loci), li.p_zi(li.t_loci), 'ro');
+            plot(li.p_r([1 end]), li.th*[1 1], 'c-');
+            plot(li.p_ri(li.indi), li.p_zi(li.indi), 'md');
             title([sub_title '-line profile']);
         end
 end
