@@ -2,7 +2,7 @@ function short_axis_analysis
 
 % Variables
 
-dicom_file_string = '../data/enIm5.dcm';
+dicom_file_string = '../data/enIm9.dcm';
 frame_number=8;
 
 % Gauss filter SD
@@ -27,7 +27,10 @@ septal_angles = linspace(-60, 20, 10);
 peak_prominence = 0.1;
 
 opposite_angles = linspace(140, 180, 10);
-opposite_threshold = 0.4;
+opposite_threshold = 0.3;
+
+endocardial_angles = linspace(-100, 90, 10);
+endocardial_threshold = 0.7;
 
 interp_x = 0.1;
 
@@ -103,6 +106,19 @@ for frame_counter = frame_number : frame_number
             'ContractionBias', contraction_bias);
     end
     
+    % Get the convex hull for the LV
+    lv_props = regionprops(im_c{2}, {'BoundingBox','ConvexImage'});
+    bb = round(lv_props(1).BoundingBox + [0.5 0.5 0 0])
+    im_lv_convex_hull = zeros(size(im_f));
+    c_im = lv_props(1).ConvexImage;
+    scim = size(c_im)
+    szlvcb = size(im_lv_convex_hull)
+    for i = 1 : bb(4)
+        r = bb(2)+i-1;
+        c = bb(1)-1;
+        im_lv_convex_hull(r,c + [1:(bb(3))]) = c_im(i,:);
+    end
+    
     % Find the centroid
     lv_props = regionprops(im_c{2}, {'Centroid'});
     temp = cat(1, lv_props);
@@ -134,6 +150,19 @@ for frame_counter = frame_number : frame_number
         
         display_angle_images(subplot_counter + 3, 'opposite', out);
     end
+
+    % Loop through endocardial angles
+    for endocardial_counter = 1:numel(endocardial_angles)
+        
+        % Rotate the image around the centroid
+        im_rot = rotateAround(im_f, lv_centroid(2), lv_centroid(1), ...
+            endocardial_angles(endocardial_counter));
+                
+        [er(endocardial_counter), out] = profile_analysis('endocardial');
+        
+        display_angle_images(subplot_counter + 5, 'endocardial', out);
+    end
+
     
     figure(2);
     clf
@@ -151,19 +180,20 @@ for frame_counter = frame_number : frame_number
     g = repmat(zeros(size(im_f)),[1 1 3]);
     g(:,:,2)=1;
     imagesc(im_f);
+    % Plot LV convex hull
+    visboundaries(im_lv_convex_hull,'Color','r');
     title('Analysis result');
     h = image(g);
     set(h, 'AlphaData', 0.5*(im_c{2} + im_c{1}));
     plot(lv_centroid(1), lv_centroid(2), 'ro');
     for septal_counter = 1 : numel(septal_angles)
-        sx(septal_counter) = lv_centroid(1) + sr(septal_counter)*sind(septal_angles(septal_counter))
-        sy(septal_counter) = lv_centroid(2) - sr(septal_counter)*cosd(septal_angles(septal_counter))
+        sx(septal_counter) = lv_centroid(1) + sr(septal_counter)*sind(septal_angles(septal_counter));
+        sy(septal_counter) = lv_centroid(2) - sr(septal_counter)*cosd(septal_angles(septal_counter));
     end
     plot(sx, sy, 'bo');
-
     for opposite_counter = 1 : numel(opposite_angles)
-        ox(opposite_counter) = lv_centroid(1) + or(opposite_counter)*sind(opposite_angles(opposite_counter))
-        oy(opposite_counter) = lv_centroid(2) - or(opposite_counter)*cosd(opposite_angles(opposite_counter))
+        ox(opposite_counter) = lv_centroid(1) + or(opposite_counter)*sind(opposite_angles(opposite_counter));
+        oy(opposite_counter) = lv_centroid(2) - or(opposite_counter)*cosd(opposite_angles(opposite_counter));
     end
     plot(ox, oy, 'go');
     
@@ -171,17 +201,36 @@ for frame_counter = frame_number : frame_number
     xe = [sx ox];
     ye = [sy oy];
     
-    e_out = fit_ellipse(xe',ye')
+    epi_out = fit_ellipse(xe',ye')
     
     % Draw the ellipse
-    R = [ e_out.cos_phi e_out.sin_phi ; -e_out.sin_phi e_out.cos_phi ];
+    R = [ epi_out.cos_phi epi_out.sin_phi ; -epi_out.sin_phi epi_out.cos_phi ];
     theta_r         = linspace(0,2*pi);
-    ellipse_x_r     = e_out.X0 + e_out.a*cos(theta_r);
-    ellipse_y_r     = e_out.Y0 + e_out.b*sin(theta_r);
+    ellipse_x_r     = epi_out.X0 + epi_out.a*cos(theta_r);
+    ellipse_y_r     = epi_out.Y0 + epi_out.b*sin(theta_r);
     rotated_ellipse = R * [ellipse_x_r;ellipse_y_r];
     
     plot(rotated_ellipse(1,:), rotated_ellipse(2,:), 'y-', 'LineWidth',2);
-  
+
+    % Draw the endocardial points
+    for endocardial_counter = 1 : numel(endocardial_angles)
+        endo_x(endocardial_counter) = lv_centroid(1) + er(endocardial_counter)*sind(endocardial_angles(endocardial_counter));
+        endo_y(endocardial_counter) = lv_centroid(2) - er(endocardial_counter)*cosd(endocardial_angles(endocardial_counter));
+    end
+    plot(endo_x, endo_y, 'mo');
+    
+    endo_out = fit_ellipse(endo_x',endo_y')
+    
+    % Draw the ellipse
+    R = [ endo_out.cos_phi endo_out.sin_phi ; -endo_out.sin_phi endo_out.cos_phi ];
+    theta_r         = linspace(0,2*pi);
+    ellipse_x_r     = endo_out.X0 + endo_out.a*cos(theta_r);
+    ellipse_y_r     = endo_out.Y0 + endo_out.b*sin(theta_r);
+    rotated_ellipse = R * [ellipse_x_r;ellipse_y_r];
+    
+    plot(rotated_ellipse(1,:), rotated_ellipse(2,:), 'm-', 'LineWidth',2);
+
+    
     xlim([1 x_pixels]);
     ylim([1 y_pixels]);
     set(gca, 'YDir', 'reverse');
@@ -225,6 +274,16 @@ end
                     th = opposite_threshold * p_zi(p_loci(end));
                     indi = find((p_zi<th)&(p_ri < p_ri(p_loci(end))), 1, 'last');
                     ri = p_ri(numel(p_zi)-indi);
+                case 'endocardial'
+                    if (isempty(t_loci))
+                        low_z = 0;
+                    else
+                        low_z = p_zi(t_loci(end));
+                    end
+                    th = low_z + endocardial_threshold * ...
+                        (p_zi(p_loci(end)) - low_z);
+                    indi = find((p_zi < th)&(p_ri < p_ri(p_loci(end))), 1, 'last');
+                    ri = p_ri(numel(p_zi)-indi);                    
             end
             
             out.p_r = p_r;
@@ -235,7 +294,6 @@ end
             out.t_loci = t_loci;
             out.th = th;
             out.indi = indi;
-            
         end
 
         function subplot_counter = display_frame_images()
@@ -337,6 +395,7 @@ end
             for i=1:2
                 visboundaries(im_c{i},'Color',cm(i,:));
             end
+            visboundaries(im_lv_convex_hull, 'Color', 'g');
             plot(lv_centroid(1), lv_centroid(2), 'ro');
             xlim([zoom_limits(1) zoom_limits(2)]);
             ylim([zoom_limits(1) zoom_limits(2)]);
